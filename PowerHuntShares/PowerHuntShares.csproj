@@ -17,6 +17,7 @@
     <!-- Windows-only: uses Netapi32, advapi32, System.DirectoryServices -->
     <RuntimeIdentifiers>win-x64;win-x86</RuntimeIdentifiers>
     <SelfContained>true</SelfContained>
+    <BuiltInComInteropSupport>true</BuiltInComInteropSupport>
     <PublishSingleFile>true</PublishSingleFile>
     <EnableCompressionInSingleFile>true</EnableCompressionInSingleFile>
     <PublishTrimmed>True</PublishTrimmed>
