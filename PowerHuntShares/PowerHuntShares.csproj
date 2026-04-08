@@ -1,0 +1,31 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <RootNamespace>PowerHuntShares</RootNamespace>
+    <AssemblyName>PowerHuntShares</AssemblyName>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <Platforms>AnyCPU;x64</Platforms>
+    <AssemblyTitle>PowerHuntShares</AssemblyTitle>
+    <AssemblyDescription>SMB Share Hunter - Active Directory share enumeration and analysis tool</AssemblyDescription>
+    <AssemblyCompany>NetSPI</AssemblyCompany>
+    <AssemblyVersion>2.1.1.0</AssemblyVersion>
+    <FileVersion>2.1.1.0</FileVersion>
+    <!-- Windows-only: uses Netapi32, advapi32, System.DirectoryServices -->
+    <RuntimeIdentifiers>win-x64;win-x86</RuntimeIdentifiers>
+    <SelfContained>true</SelfContained>
+    <PublishSingleFile>true</PublishSingleFile>
+    <EnableCompressionInSingleFile>true</EnableCompressionInSingleFile>
+    <PublishTrimmed>True</PublishTrimmed>
+  </PropertyGroup>
+
+  <ItemGroup>
+<PackageReference Include="System.DirectoryServices" Version="8.0.1" />
+    <PackageReference Include="System.DirectoryServices.AccountManagement" Version="8.0.1" />
+    <PackageReference Include="System.Security.Cryptography.ProtectedData" Version="8.0.0" />
+  </ItemGroup>
+
+</Project>
