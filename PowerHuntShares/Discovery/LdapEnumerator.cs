@@ -23,14 +23,31 @@ public class LdapEnumerator
     // ── Public API ───────────────────────────────────────────────────────────
 
     /// <summary>
-    /// Returns the first reachable domain controller's DNS hostname and the domain FQDN.
-    /// Mirrors the DC detection block at the start of Invoke-HuntSMBShares.
+    /// Returns the domain controller hostname and domain FQDN.
+    ///
+    /// When -d is supplied we already have the DC hostname; derive the domain
+    /// name from the base DN (DC=domain,DC=local → domain.local) instead of running a
+    /// redundant LDAP search that can fail with E_ADS_BAD_PARAMETER on some DCs.
+    ///
+    /// When no DC is supplied (domain-joined machine) an LDAP search is used to
+    /// locate a DC and confirm connectivity, mirroring the PS behaviour.
     /// </summary>
     public (string DcHostname, string Domain) DiscoverDomainController()
     {
-        const string filter = "(&(objectCategory=computer)(userAccountControl:1.2.840.113556.1.4.803:=8192))";
+        if (!string.IsNullOrEmpty(_domainController))
+        {
+            // DC explicitly provided — no discovery query needed.
+            string baseDn = GetBaseDn();
+            string domain = string.Join(".",
+                baseDn.Split(',')
+                      .Where(p => p.TrimStart().StartsWith("DC=", StringComparison.OrdinalIgnoreCase))
+                      .Select(p => p.TrimStart().Substring(3)));
+            return (_domainController, domain);
+        }
 
-        var results = Query(filter, pageSize: 1);
+        // No DC provided — query to find one and confirm connectivity.
+        const string filter = "(&(objectCategory=computer)(userAccountControl:1.2.840.113556.1.4.803:=8192))";
+        var results = Query(filter);
         var first = results.FirstOrDefault();
         if (first is null)
             throw new InvalidOperationException("Could not locate a domain controller via LDAP.");
@@ -43,12 +60,11 @@ public class LdapEnumerator
             ? first.Properties["cn"][0]?.ToString() ?? string.Empty
             : string.Empty;
 
-        // Strip the CN portion to derive the domain FQDN, e.g. dc1.demo.local → demo.local
-        string domain = string.IsNullOrEmpty(dcCn)
+        string domainName = string.IsNullOrEmpty(dcCn)
             ? dcHostname
             : dcHostname.Replace($"{dcCn}.", string.Empty, StringComparison.OrdinalIgnoreCase);
 
-        return (dcHostname, domain);
+        return (dcHostname, domainName);
     }
 
     /// <summary>
