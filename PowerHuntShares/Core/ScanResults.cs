@@ -34,6 +34,7 @@ public class ScanResults
     public List<ShareAclEntry> HighRiskAcls { get; set; } = [];
 
     public List<DirectoryListingEntry> DirectoryListings { get; set; } = [];
+    public List<InterestingFile> InterestingFiles { get; set; } = [];
 
     // ── Credentials ─────────────────────────────────────────────────────────
     public List<CredentialFinding> CredentialFindings { get; set; } = [];

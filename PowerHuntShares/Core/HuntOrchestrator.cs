@@ -365,12 +365,34 @@ public class HuntOrchestrator
     }
 
     /// <summary>
-    /// Phase 9: Hunt credential files in the directory listings.
+    /// Phase 9: Detect interesting files and hunt credentials in directory listings.
+    /// Mirrors the interesting-file detection (PS lines 1688–1804) and credential parsing.
     /// </summary>
     private void Phase9_CredentialHunting()
     {
         if (_results.DirectoryListings.Count == 0) return;
 
+        // 9a — Interesting file detection (keyword matching).
+        Log("Detecting interesting files in directory listings…");
+        var detector = new InterestingFileDetector(_opts.FileKeywordsPath);
+        _results.InterestingFiles = detector.Detect(_results.DirectoryListings).ToList();
+        Log($"  {_results.InterestingFiles.Count} interesting files found.");
+
+        if (_results.InterestingFiles.Count > 0)
+        {
+            CsvExporter.Export(_results.InterestingFiles,
+                Path.Combine(_outputResults,
+                    $"{_results.TargetDomain}-Shares-Interesting-Files.csv"));
+
+            // Log category breakdown.
+            var byCat = _results.InterestingFiles
+                .GroupBy(f => f.Category)
+                .OrderByDescending(g => g.Count());
+            foreach (var g in byCat)
+                Log($"    {g.Key}: {g.Count()}");
+        }
+
+        // 9b — Credential file parsing.
         Log("Hunting credential files in directory listings…");
         _results.CredentialFindings = _creds!.Hunt(_results.DirectoryListings).ToList();
         Log($"  {_results.CredentialFindings.Count} credential findings.");
