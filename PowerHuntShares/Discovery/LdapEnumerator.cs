@@ -149,31 +149,42 @@ public class LdapEnumerator
     // ── Helpers ──────────────────────────────────────────────────────────────
 
     /// <summary>
-    /// Resolves the domain base DN (e.g. DC=domain,DC=local) from RootDSE.
-    /// Cached after the first call. Needed to turn partial paths like
-    /// CN=Subnets,CN=Sites,CN=Configuration into a fully-qualified DN.
+    /// Resolves the domain base DN (e.g. DC=domain,DC=local).
+    /// Mirrors PS: (New-Object DirectoryEntry "LDAP://$DC").distinguishedname
+    ///             or ([ADSI]"").distinguishedName for the no-DC case.
+    /// Cached after the first call.
     /// </summary>
     private string GetBaseDn()
     {
         if (_baseDn is not null)
             return _baseDn;
 
-        string rootPath = string.IsNullOrEmpty(_domainController)
-            ? "LDAP://RootDSE"
-            : $"LDAP://{_domainController}/RootDSE";
-
-        try
+        // Mirror PS exactly: bind to LDAP://$DC (no /RootDSE suffix) and read
+        // distinguishedName.  For the no-DC case, bind to "LDAP://RootDSE"
+        // to get defaultNamingContext (auto-discovers the current domain DC).
+        string rootPath;
+        string property;
+        if (!string.IsNullOrEmpty(_domainController))
         {
-            using var rootDse = _credential is not null
-                ? new DirectoryEntry(rootPath, _credential.UserName, _credential.Password)
-                : new DirectoryEntry(rootPath);
-
-            _baseDn = rootDse.Properties["defaultNamingContext"]?[0]?.ToString() ?? string.Empty;
+            rootPath = $"LDAP://{_domainController}";
+            property = "distinguishedName";
         }
-        catch
+        else
         {
-            _baseDn = string.Empty;
+            rootPath = "LDAP://RootDSE";
+            property = "defaultNamingContext";
         }
+
+        using var root = _credential is not null
+            ? new DirectoryEntry(rootPath, _credential.UserName, _credential.Password)
+            : new DirectoryEntry(rootPath);
+
+        _baseDn = root.Properties[property]?[0]?.ToString() ?? string.Empty;
+
+        if (string.IsNullOrEmpty(_baseDn))
+            throw new InvalidOperationException(
+                $"Could not resolve domain base DN from '{rootPath}'. " +
+                "Verify the domain controller is reachable and credentials are correct.");
 
         return _baseDn;
     }
