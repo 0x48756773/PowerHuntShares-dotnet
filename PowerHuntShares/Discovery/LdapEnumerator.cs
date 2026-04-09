@@ -166,31 +166,20 @@ public class LdapEnumerator
         if (!string.IsNullOrEmpty(_domainController))
         {
             // Strategy 1 — RootDSE on the specific DC (most reliable).
-            if (string.IsNullOrEmpty(_baseDn))
+            try
             {
-                try
-                {
-                    using var rootDse = _credential is not null
-                        ? new DirectoryEntry($"LDAP://{_domainController}/RootDSE",
-                            _credential.UserName, _credential.Password)
-                        : new DirectoryEntry($"LDAP://{_domainController}/RootDSE");
-
-                    rootDse.RefreshCache(["defaultNamingContext"]);
-                    _baseDn = rootDse.Properties["defaultNamingContext"]?[0]?.ToString();
-                }
-                catch { }
+                using var rootDse = MakeEntry($"LDAP://{_domainController}/RootDSE");
+                rootDse.RefreshCache(["defaultNamingContext"]);
+                _baseDn = rootDse.Properties["defaultNamingContext"]?[0]?.ToString();
             }
+            catch { }
 
             // Strategy 2 — bind to DC root, read distinguishedName (mirrors PS).
             if (string.IsNullOrEmpty(_baseDn))
             {
                 try
                 {
-                    using var root = _credential is not null
-                        ? new DirectoryEntry($"LDAP://{_domainController}",
-                            _credential.UserName, _credential.Password)
-                        : new DirectoryEntry($"LDAP://{_domainController}");
-
+                    using var root = MakeEntry($"LDAP://{_domainController}");
                     root.RefreshCache(["distinguishedName"]);
                     _baseDn = root.Properties["distinguishedName"]?[0]?.ToString();
                 }
@@ -198,9 +187,8 @@ public class LdapEnumerator
             }
 
             // Strategy 3 — derive from the hostname.
-            // A DC hostname has the form  machineName.domain.tld  (3+ labels).
-            // A bare domain name has the form  domain.tld           (2  labels).
-            // Skip the first label when 3+, use all labels when 2.
+            // DC hostname: machineName.domain.tld (3+ labels) → skip first label.
+            // Domain name: domain.tld             (2  labels) → use all labels.
             if (string.IsNullOrEmpty(_baseDn) && _domainController.Contains('.'))
             {
                 var parts = _domainController.Split('.');
@@ -210,14 +198,10 @@ public class LdapEnumerator
         }
         else
         {
-            // No DC specified — RootDSE auto-discovery (domain-joined machine).
+            // No DC — RootDSE auto-discovery on a domain-joined machine.
             try
             {
-                using var rootDse = _credential is not null
-                    ? new DirectoryEntry("LDAP://RootDSE",
-                        _credential.UserName, _credential.Password)
-                    : new DirectoryEntry("LDAP://RootDSE");
-
+                using var rootDse = MakeEntry("LDAP://RootDSE");
                 rootDse.RefreshCache(["defaultNamingContext"]);
                 _baseDn = rootDse.Properties["defaultNamingContext"]?[0]?.ToString();
             }
@@ -227,7 +211,7 @@ public class LdapEnumerator
         if (string.IsNullOrEmpty(_baseDn))
             throw new InvalidOperationException(
                 $"Could not determine base DN for '{_domainController ?? "auto-discover"}'. " +
-                "Verify the DC hostname is reachable and credentials are correct. " +
+                "Verify the DC is reachable and credentials are correct. " +
                 "Use -d with a specific DC hostname (e.g. dc1.domain.local), not the domain name.");
 
         return _baseDn;
@@ -235,44 +219,25 @@ public class LdapEnumerator
 
     private DirectoryEntry BuildDirectoryEntry(string? ldapPath)
     {
-        // Mirror PS Get-LdapQuery exactly:
-        //   $objDomain = ([ADSI]'').distinguishedName  (or LDAP://$DC version)
-        //   if ($LdapPath) { $LdapPath = $LdapPath + ',' + $objDomain }
-        //   $objDomainPath = [ADSI]"LDAP://$LdapPath"  -or-  [ADSI]''
-        //
-        // Key: PS always resolves the base DN first and builds a fully-qualified
-        // path.  Bare "LDAP://" is E_ADS_BAD_PARAMETER; "" alone can fail too.
-
+        // GetBaseDn() always returns a non-empty string or throws, so all
+        // null/empty guards that existed here are no longer needed.
         string baseDn = GetBaseDn();
 
-        // Build the fully-qualified DN for the search root.
         string fullDn = !string.IsNullOrEmpty(ldapPath)
-            ? (string.IsNullOrEmpty(baseDn) ? ldapPath : $"{ldapPath},{baseDn}")
-            : baseDn;   // no sub-path → domain root DN
+            ? $"{ldapPath},{baseDn}"
+            : baseDn;
 
-        string ldapUri;
-        if (!string.IsNullOrEmpty(_domainController))
-        {
-            // With explicit DC: LDAP://dc1.domain.local/DC=domain,DC=local
-            ldapUri = !string.IsNullOrEmpty(fullDn)
-                ? $"LDAP://{_domainController}/{fullDn}"
-                : $"LDAP://{_domainController}";
-        }
-        else
-        {
-            // No DC: LDAP://DC=domain,DC=local  (explicit, fully-qualified)
-            // If baseDn is empty (RootDSE failed), fall back to "" and let
-            // ADSI auto-discover — same as [ADSI]'' in the PS script.
-            ldapUri = !string.IsNullOrEmpty(fullDn)
-                ? $"LDAP://{fullDn}"
-                : "";
-        }
+        string ldapUri = !string.IsNullOrEmpty(_domainController)
+            ? $"LDAP://{_domainController}/{fullDn}"
+            : $"LDAP://{fullDn}";
 
-        if (_credential is not null)
-            return new DirectoryEntry(ldapUri, _credential.UserName, _credential.Password);
-
-        return new DirectoryEntry(ldapUri);
+        return MakeEntry(ldapUri);
     }
+
+    private DirectoryEntry MakeEntry(string path) =>
+        _credential is not null
+            ? new DirectoryEntry(path, _credential.UserName, _credential.Password)
+            : new DirectoryEntry(path);
 
     private static string GetProp(SearchResult result, string propertyName)
     {
