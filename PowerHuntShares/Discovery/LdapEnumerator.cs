@@ -136,52 +136,46 @@ public class LdapEnumerator
         int pageSize = 1000,
         SearchScope scope = SearchScope.Subtree)
     {
+        // Attempt 1 — with paging enabled (PageSize > 0).
         using DirectoryEntry rootEntry = BuildDirectoryEntry(ldapPath);
-
-        try
-        {
-            return ExecuteSearch(rootEntry, ldapFilter, scope, pageSize);
-        }
-        catch (Exception ex) when (IsPageControlError(ex) && pageSize > 0)
-        {
-            // E_ADS_BAD_PARAMETER (0x80005008) means a search preference is
-            // unsupported — typically the paging or referral LDAP control.
-            // Retry with a fresh DirectoryEntry + DirectorySearcher so no COM
-            // object carries cached state from the failed attempt.
-            using DirectoryEntry freshEntry = BuildDirectoryEntry(ldapPath);
-            return ExecuteSearch(freshEntry, ldapFilter, scope, pageSize: 0);
-        }
-    }
-
-    /// <summary>
-    /// Inner search executor.  Always creates a fresh DirectorySearcher
-    /// so each attempt gets a clean IDirectorySearch COM object.
-    /// </summary>
-    private IReadOnlyList<SearchResult> ExecuteSearch(
-        DirectoryEntry rootEntry,
-        string ldapFilter,
-        SearchScope scope,
-        int pageSize)
-    {
         using var searcher = new DirectorySearcher(rootEntry)
         {
             Filter = ldapFilter,
             SearchScope = scope,
             PageSize = pageSize,
-            // Disable referral chasing — some DCs reject the LDAP referral
-            // control just as they reject the paging control.
             ReferralChasing = ReferralChasingOption.None,
         };
 
         try
         {
             using var results = searcher.FindAll();
-            // Copy into a list before disposing the SearchResultCollection.
+            return results.Cast<SearchResult>().ToList();
+        }
+        catch (Exception ex) when (IsPageControlError(ex) && pageSize > 0)
+        {
+            // E_ADS_BAD_PARAMETER (0x80005008) — a search preference
+            // (paging control) is unsupported by this DC.  Retry with a
+            // fresh DirectoryEntry + DirectorySearcher and paging off.
+        }
+
+        // Attempt 2 — fresh COM objects, paging disabled.
+        using DirectoryEntry freshEntry = BuildDirectoryEntry(ldapPath);
+        using var retrySearcher = new DirectorySearcher(freshEntry)
+        {
+            Filter = ldapFilter,
+            SearchScope = scope,
+            PageSize = 0,
+            ReferralChasing = ReferralChasingOption.None,
+        };
+
+        try
+        {
+            using var results = retrySearcher.FindAll();
             return results.Cast<SearchResult>().ToList();
         }
         catch (Exception ex)
         {
-            throw new InvalidOperationException(BuildQueryError(rootEntry, ldapFilter, ex), ex);
+            throw new InvalidOperationException(BuildQueryError(freshEntry, ldapFilter, ex), ex);
         }
     }
 
