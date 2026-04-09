@@ -151,14 +151,26 @@ public class LdapEnumerator
             // Copy into a list before disposing the SearchResultCollection
             return results.Cast<SearchResult>().ToList();
         }
+        catch (Exception ex) when (IsPageControlError(ex) && searcher.PageSize > 0)
+        {
+            // E_ADS_BAD_PARAMETER (0x80005008) from ExecuteSearch means a search
+            // preference is unsupported — the paged-results LDAP control is the
+            // most common culprit.  Retry without paging; the server's own limit
+            // (typically 1000) will cap the result set.
+            searcher.PageSize = 0;
+            try
+            {
+                using var results = searcher.FindAll();
+                return results.Cast<SearchResult>().ToList();
+            }
+            catch (Exception retryEx)
+            {
+                throw new InvalidOperationException(BuildQueryError(rootEntry, ldapFilter, retryEx), retryEx);
+            }
+        }
         catch (Exception ex)
         {
-            string hint = string.IsNullOrEmpty(_domainController)
-                ? " If this machine is not domain-joined, use --domain-controller to specify a DC."
-                : string.Empty;
-            throw new InvalidOperationException(
-                $"LDAP query failed — root='{rootEntry.Path}' filter='{ldapFilter}' " +
-                $"baseDn='{_baseDn ?? "unresolved"}': {ex.GetType().Name}: {ex.Message}{hint}", ex);
+            throw new InvalidOperationException(BuildQueryError(rootEntry, ldapFilter, ex), ex);
         }
     }
 
@@ -254,6 +266,19 @@ public class LdapEnumerator
         _credential is not null
             ? new DirectoryEntry(path, _credential.UserName, _credential.Password)
             : new DirectoryEntry(path);
+
+    private static bool IsPageControlError(Exception ex) =>
+        ex is System.Runtime.InteropServices.COMException com &&
+        unchecked((uint)com.HResult) == 0x80005008;
+
+    private string BuildQueryError(DirectoryEntry root, string filter, Exception ex)
+    {
+        string hint = string.IsNullOrEmpty(_domainController)
+            ? " If this machine is not domain-joined, use -d to specify a DC."
+            : string.Empty;
+        return $"LDAP query failed — root='{root.Path}' filter='{filter}' " +
+               $"baseDn='{_baseDn ?? "unresolved"}': {ex.GetType().Name}: {ex.Message}{hint}";
+    }
 
     private static string GetProp(SearchResult result, string propertyName)
     {
