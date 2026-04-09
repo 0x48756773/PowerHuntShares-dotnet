@@ -137,36 +137,42 @@ public class LdapEnumerator
         SearchScope scope = SearchScope.Subtree)
     {
         DirectoryEntry rootEntry = BuildDirectoryEntry(ldapPath);
+        return ExecuteSearch(rootEntry, ldapFilter, scope, pageSize);
+    }
 
+    /// <summary>
+    /// Inner search executor. Uses a fresh DirectorySearcher on each call so
+    /// that the retry (PageSize=0) is not hampered by a COM object that cached
+    /// the paging preference from the first failed attempt.
+    /// </summary>
+    private IReadOnlyList<SearchResult> ExecuteSearch(
+        DirectoryEntry rootEntry,
+        string ldapFilter,
+        SearchScope scope,
+        int pageSize)
+    {
         using var searcher = new DirectorySearcher(rootEntry)
         {
             Filter = ldapFilter,
             SearchScope = scope,
             PageSize = pageSize,
+            // Disable referral chasing — some DCs reject the LDAP referral
+            // control just as they reject the paging control.
+            ReferralChasing = ReferralChasingOption.None,
         };
 
         try
         {
             using var results = searcher.FindAll();
-            // Copy into a list before disposing the SearchResultCollection
+            // Copy into a list before disposing the SearchResultCollection.
             return results.Cast<SearchResult>().ToList();
         }
-        catch (Exception ex) when (IsPageControlError(ex) && searcher.PageSize > 0)
+        catch (Exception ex) when (IsPageControlError(ex) && pageSize > 0)
         {
-            // E_ADS_BAD_PARAMETER (0x80005008) from ExecuteSearch means a search
-            // preference is unsupported — the paged-results LDAP control is the
-            // most common culprit.  Retry without paging; the server's own limit
-            // (typically 1000) will cap the result set.
-            searcher.PageSize = 0;
-            try
-            {
-                using var results = searcher.FindAll();
-                return results.Cast<SearchResult>().ToList();
-            }
-            catch (Exception retryEx)
-            {
-                throw new InvalidOperationException(BuildQueryError(rootEntry, ldapFilter, retryEx), retryEx);
-            }
+            // E_ADS_BAD_PARAMETER (0x80005008) means a search preference is
+            // unsupported. Retry with a brand-new DirectorySearcher and paging
+            // disabled so the COM object carries no state from the failed attempt.
+            return ExecuteSearch(rootEntry, ldapFilter, scope, pageSize: 0);
         }
         catch (Exception ex)
         {
