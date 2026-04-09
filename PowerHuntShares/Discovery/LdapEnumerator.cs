@@ -12,7 +12,8 @@ public class LdapEnumerator
 {
     private readonly string? _domainController;
     private readonly NetworkCredential? _credential;
-    private string? _baseDn; // lazily resolved from RootDSE
+    private string? _baseDn;        // lazily resolved from RootDSE (domain DN)
+    private string? _configDn;      // lazily resolved from RootDSE (forest Configuration DN)
 
     public LdapEnumerator(string? domainController = null, NetworkCredential? credential = null)
     {
@@ -99,8 +100,13 @@ public class LdapEnumerator
     /// </summary>
     public IReadOnlyList<SubnetInfo> GetDomainSubnets()
     {
-        const string ldapPath = "CN=Subnets,CN=Sites,CN=Configuration";
-        var results = Query("(objectCategory=subnet)", ldapPath: ldapPath);
+        // The Configuration partition lives under the forest root, not the
+        // domain DN.  In child domains (e.g. child.forest.local) appending
+        // CN=Configuration,DC=child,DC=forest,DC=local gives "no such object".
+        // Use configurationNamingContext from RootDSE to get the correct path.
+        string configDn = GetConfigDn();
+        string subnetDn = $"CN=Subnets,CN=Sites,{configDn}";
+        var results = QueryDn("(objectCategory=subnet)", subnetDn);
         var subnets = new List<SubnetInfo>();
 
         foreach (SearchResult result in results)
@@ -179,7 +185,93 @@ public class LdapEnumerator
         }
     }
 
+    /// <summary>
+    /// Queries using a fully-qualified DN (not relative to the domain base DN).
+    /// Used for forest-level containers like the Configuration partition.
+    /// </summary>
+    private IReadOnlyList<SearchResult> QueryDn(
+        string ldapFilter,
+        string fullDn,
+        int pageSize = 1000,
+        SearchScope scope = SearchScope.Subtree)
+    {
+        string ldapUri = !string.IsNullOrEmpty(_domainController)
+            ? $"LDAP://{_domainController}/{fullDn}"
+            : $"LDAP://{fullDn}";
+
+        using DirectoryEntry entry = MakeEntry(ldapUri);
+        using var searcher = new DirectorySearcher(entry)
+        {
+            Filter = ldapFilter,
+            SearchScope = scope,
+            PageSize = pageSize,
+            ReferralChasing = ReferralChasingOption.None,
+        };
+
+        try
+        {
+            using var results = searcher.FindAll();
+            return results.Cast<SearchResult>().ToList();
+        }
+        catch (Exception ex) when (IsPageControlError(ex) && pageSize > 0)
+        {
+            // Retry without paging.
+        }
+
+        using DirectoryEntry freshEntry = MakeEntry(ldapUri);
+        using var retrySearcher = new DirectorySearcher(freshEntry)
+        {
+            Filter = ldapFilter,
+            SearchScope = scope,
+            PageSize = 0,
+            ReferralChasing = ReferralChasingOption.None,
+        };
+
+        try
+        {
+            using var results = retrySearcher.FindAll();
+            return results.Cast<SearchResult>().ToList();
+        }
+        catch (Exception ex)
+        {
+            throw new InvalidOperationException(
+                $"LDAP query failed — root='{ldapUri}' filter='{ldapFilter}': " +
+                $"{ex.GetType().Name}: {ex.Message}", ex);
+        }
+    }
+
     // ── Helpers ──────────────────────────────────────────────────────────────
+
+    /// <summary>
+    /// Resolves the forest Configuration DN (e.g. CN=Configuration,DC=forest,DC=local).
+    /// In child domains this differs from the domain base DN.
+    /// </summary>
+    private string GetConfigDn()
+    {
+        if (_configDn is not null)
+            return _configDn;
+
+        // Try RootDSE — configurationNamingContext always points to the
+        // forest-level Configuration partition regardless of which domain
+        // the DC belongs to.
+        string rootDsePath = !string.IsNullOrEmpty(_domainController)
+            ? $"LDAP://{_domainController}/RootDSE"
+            : "LDAP://RootDSE";
+
+        try
+        {
+            using var rootDse = MakeEntry(rootDsePath);
+            rootDse.RefreshCache(["configurationNamingContext"]);
+            _configDn = rootDse.Properties["configurationNamingContext"]?[0]?.ToString();
+        }
+        catch { }
+
+        // Fallback — assume single-domain forest: CN=Configuration,{baseDn}
+        if (string.IsNullOrEmpty(_configDn))
+            _configDn = $"CN=Configuration,{GetBaseDn()}";
+
+        return _configDn;
+    }
 
     /// <summary>
     /// Resolves the domain base DN (e.g. DC=domain,DC=local). Cached after the first call.
