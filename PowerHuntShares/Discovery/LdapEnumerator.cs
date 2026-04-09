@@ -12,6 +12,7 @@ public class LdapEnumerator
 {
     private readonly string? _domainController;
     private readonly NetworkCredential? _credential;
+    private string? _baseDn; // lazily resolved from RootDSE
 
     public LdapEnumerator(string? domainController = null, NetworkCredential? credential = null)
     {
@@ -143,25 +144,69 @@ public class LdapEnumerator
 
     // ── Helpers ──────────────────────────────────────────────────────────────
 
-    private DirectoryEntry BuildDirectoryEntry(string? ldapPath)
+    /// <summary>
+    /// Resolves the domain base DN (e.g. DC=domain,DC=local) from RootDSE.
+    /// Cached after the first call. Needed to turn partial paths like
+    /// CN=Subnets,CN=Sites,CN=Configuration into a fully-qualified DN.
+    /// </summary>
+    private string GetBaseDn()
     {
-        if (!string.IsNullOrEmpty(_domainController))
+        if (_baseDn is not null)
+            return _baseDn;
+
+        string rootPath = string.IsNullOrEmpty(_domainController)
+            ? "LDAP://RootDSE"
+            : $"LDAP://{_domainController}/RootDSE";
+
+        try
         {
-            string ldapUri = string.IsNullOrEmpty(ldapPath)
-                ? $"LDAP://{_domainController}"
-                : $"LDAP://{_domainController}/{ldapPath}";
+            using var rootDse = _credential is not null
+                ? new DirectoryEntry(rootPath, _credential.UserName, _credential.Password)
+                : new DirectoryEntry(rootPath);
 
-            if (_credential is not null)
-                return new DirectoryEntry(ldapUri, _credential.UserName, _credential.Password);
-
-            return new DirectoryEntry(ldapUri);
+            _baseDn = rootDse.Properties["defaultNamingContext"]?[0]?.ToString() ?? string.Empty;
+        }
+        catch
+        {
+            _baseDn = string.Empty;
         }
 
-        // Current user context (domain-joined machine)
-        if (!string.IsNullOrEmpty(ldapPath))
-            return new DirectoryEntry($"LDAP://{ldapPath}");
+        return _baseDn;
+    }
 
-        return new DirectoryEntry();
+    private DirectoryEntry BuildDirectoryEntry(string? ldapPath)
+    {
+        // Partial paths (e.g. CN=Subnets,CN=Sites,CN=Configuration) must be
+        // qualified with the domain base DN or ADSI throws E_ADS_BAD_PATHNAME.
+        string? resolvedPath = null;
+        if (!string.IsNullOrEmpty(ldapPath))
+        {
+            string baseDn = GetBaseDn();
+            resolvedPath = string.IsNullOrEmpty(baseDn) ? ldapPath : $"{ldapPath},{baseDn}";
+        }
+
+        string ldapUri;
+        if (!string.IsNullOrEmpty(_domainController))
+        {
+            ldapUri = resolvedPath is not null
+                ? $"LDAP://{_domainController}/{resolvedPath}"
+                : $"LDAP://{_domainController}";
+        }
+        else
+        {
+            ldapUri = resolvedPath is not null
+                ? $"LDAP://{resolvedPath}"
+                : string.Empty;
+        }
+
+        if (_credential is not null)
+            return !string.IsNullOrEmpty(ldapUri)
+                ? new DirectoryEntry(ldapUri, _credential.UserName, _credential.Password)
+                : new DirectoryEntry(string.Empty, _credential.UserName, _credential.Password);
+
+        return !string.IsNullOrEmpty(ldapUri)
+            ? new DirectoryEntry(ldapUri)
+            : new DirectoryEntry();
     }
 
     private static string GetProp(SearchResult result, string propertyName)
