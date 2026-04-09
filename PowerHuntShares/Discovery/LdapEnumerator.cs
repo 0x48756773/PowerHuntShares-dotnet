@@ -199,14 +199,15 @@ public class LdapEnumerator
                 : string.Empty;
         }
 
-        if (_credential is not null)
-            return !string.IsNullOrEmpty(ldapUri)
-                ? new DirectoryEntry(ldapUri, _credential.UserName, _credential.Password)
-                : new DirectoryEntry(string.Empty, _credential.UserName, _credential.Password);
+        // Fall back to "LDAP://" (not empty string) so ADSI uses the LDAP
+        // provider against the current domain rather than the WinNT provider.
+        if (string.IsNullOrEmpty(ldapUri))
+            ldapUri = "LDAP://";
 
-        return !string.IsNullOrEmpty(ldapUri)
-            ? new DirectoryEntry(ldapUri)
-            : new DirectoryEntry();
+        if (_credential is not null)
+            return new DirectoryEntry(ldapUri, _credential.UserName, _credential.Password);
+
+        return new DirectoryEntry(ldapUri);
     }
 
     private static string GetProp(SearchResult result, string propertyName)
