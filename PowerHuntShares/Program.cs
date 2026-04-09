@@ -66,20 +66,13 @@ static ScanOptions ParseArgs(string[] args)
             case "-o":
             case "--output":            opts.OutputDirectory        = Next(args, ref i, a); break;
             case "--host-list":         opts.HostList               = Next(args, ref i, a); break;
-            case "--sample-sum":        opts.SampleSum              = NextInt(args, ref i, a); break;
             case "--timeout":           opts.ConnectionTimeoutSeconds = NextInt(args, ref i, a); break;
-            case "--share-creation-days": opts.ShareCreationDays    = NextInt(args, ref i, a); break;
-            case "--last-access-days":  opts.LastAccessDays         = NextInt(args, ref i, a); break;
-            case "--last-mod-days":     opts.LastModDays            = NextInt(args, ref i, a); break;
             case "--dir-level":         opts.DirLevel               = NextInt(args, ref i, a); break;
             case "--file-keywords":     opts.FileKeywordsPath       = Next(args, ref i, a); break;
             case "--api-key":           opts.ApiKey                 = Next(args, ref i, a); break;
             case "--endpoint":          opts.Endpoint               = Next(args, ref i, a); break;
-            case "--export-findings":   opts.ExportFindings         = true; break;
-            case "--export-nova":       opts.ExportNova             = true; break;
             case "--no-ping":           opts.NoPing                 = true; break;
             case "--show-errors":       opts.ShowErrors             = true; break;
-            case "--suppress-timeline": opts.SuppressTimelineReport = true; break;
             default:
                 throw new ArgumentException($"Unknown argument: {a}");
         }
@@ -135,16 +128,7 @@ static void PrintHelp()
           -t, --threads <n>               Concurrent tasks (default: 20)
               --timeout <sec>             Per-host connection timeout (default: 15)
               --dir-level <n>             Directory listing depth (default: 3)
-              --sample-sum <n>            Summary sample size (default: 200)
-              --share-creation-days <n>   Recent-share threshold in days (default: 90)
-              --last-access-days <n>      Last-accessed threshold in days (default: 90)
-              --last-mod-days <n>         Last-modified threshold in days (default: 90)
               --file-keywords <csv>       CSV file with interesting-file keywords
-
-        OUTPUT
-              --export-findings           Export results to CSV files
-              --export-nova               Export in NOVA finding format
-              --suppress-timeline         Omit timeline section from HTML report
 
         LLM (OPTIONAL)
               --api-key <key>             API key for LLM share fingerprinting
