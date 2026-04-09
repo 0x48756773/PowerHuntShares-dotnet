@@ -151,10 +151,12 @@ public class LdapEnumerator
     /// <summary>
     /// Resolves the domain base DN (e.g. DC=domain,DC=local). Cached after the first call.
     ///
-    /// Strategy (in order):
-    ///   1. LDAP bind to DC / RootDSE and read the DN property (mirrors PS).
-    ///   2. If the bind returns empty, derive the DN from the domain name itself:
-    ///      domain.local → DC=domain,DC=local.  Works for all standard AD structures.
+    /// Strategies tried in order:
+    ///   1. LDAP://{DC}/RootDSE → defaultNamingContext  (best: works for any DC hostname)
+    ///   2. LDAP://{DC}         → distinguishedName      (mirrors PS Get-LdapQuery)
+    ///   3. Derive from hostname, skipping the machine-name prefix:
+    ///      dc1.domain.local (3+ parts) → DC=domain,DC=local
+    ///      domain.local            (2  parts) → DC=domain,DC=local
     /// </summary>
     private string GetBaseDn()
     {
@@ -163,32 +165,57 @@ public class LdapEnumerator
 
         if (!string.IsNullOrEmpty(_domainController))
         {
-            // 1. Try binding to the DC and reading distinguishedName.
-            //    Mirrors PS: (New-Object DirectoryEntry "LDAP://$DC").distinguishedname
-            try
+            // Strategy 1 — RootDSE on the specific DC (most reliable).
+            if (string.IsNullOrEmpty(_baseDn))
             {
-                using var root = _credential is not null
-                    ? new DirectoryEntry($"LDAP://{_domainController}", _credential.UserName, _credential.Password)
-                    : new DirectoryEntry($"LDAP://{_domainController}");
+                try
+                {
+                    using var rootDse = _credential is not null
+                        ? new DirectoryEntry($"LDAP://{_domainController}/RootDSE",
+                            _credential.UserName, _credential.Password)
+                        : new DirectoryEntry($"LDAP://{_domainController}/RootDSE");
 
-                root.RefreshCache(["distinguishedName"]);
-                _baseDn = root.Properties["distinguishedName"]?[0]?.ToString();
+                    rootDse.RefreshCache(["defaultNamingContext"]);
+                    _baseDn = rootDse.Properties["defaultNamingContext"]?[0]?.ToString();
+                }
+                catch { }
             }
-            catch { /* fall through to derivation */ }
 
-            // 2. If the bind gave nothing, derive DN from the domain name.
-            //    domain.local → DC=domain,DC=local  (standard AD convention).
+            // Strategy 2 — bind to DC root, read distinguishedName (mirrors PS).
+            if (string.IsNullOrEmpty(_baseDn))
+            {
+                try
+                {
+                    using var root = _credential is not null
+                        ? new DirectoryEntry($"LDAP://{_domainController}",
+                            _credential.UserName, _credential.Password)
+                        : new DirectoryEntry($"LDAP://{_domainController}");
+
+                    root.RefreshCache(["distinguishedName"]);
+                    _baseDn = root.Properties["distinguishedName"]?[0]?.ToString();
+                }
+                catch { }
+            }
+
+            // Strategy 3 — derive from the hostname.
+            // A DC hostname has the form  machineName.domain.tld  (3+ labels).
+            // A bare domain name has the form  domain.tld           (2  labels).
+            // Skip the first label when 3+, use all labels when 2.
             if (string.IsNullOrEmpty(_baseDn) && _domainController.Contains('.'))
-                _baseDn = string.Join(",",
-                    _domainController.Split('.').Select(p => $"DC={p}"));
+            {
+                var parts = _domainController.Split('.');
+                var domainParts = parts.Length >= 3 ? parts.Skip(1) : parts;
+                _baseDn = string.Join(",", domainParts.Select(p => $"DC={p}"));
+            }
         }
         else
         {
-            // No DC specified: try RootDSE auto-discovery (domain-joined machine).
+            // No DC specified — RootDSE auto-discovery (domain-joined machine).
             try
             {
                 using var rootDse = _credential is not null
-                    ? new DirectoryEntry("LDAP://RootDSE", _credential.UserName, _credential.Password)
+                    ? new DirectoryEntry("LDAP://RootDSE",
+                        _credential.UserName, _credential.Password)
                     : new DirectoryEntry("LDAP://RootDSE");
 
                 rootDse.RefreshCache(["defaultNamingContext"]);
@@ -200,8 +227,8 @@ public class LdapEnumerator
         if (string.IsNullOrEmpty(_baseDn))
             throw new InvalidOperationException(
                 $"Could not determine base DN for '{_domainController ?? "auto-discover"}'. " +
-                "Verify the DC is reachable and credentials are correct. " +
-                "If the domain name does not map directly to a base DN, use -d to specify a DC hostname.");
+                "Verify the DC hostname is reachable and credentials are correct. " +
+                "Use -d with a specific DC hostname (e.g. dc1.domain.local), not the domain name.");
 
         return _baseDn;
     }
