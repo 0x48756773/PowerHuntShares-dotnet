@@ -1,0 +1,7 @@
+<linker>
+  <!-- System.DirectoryServices uses heavy COM interop (IDirectorySearch,
+       IADs, etc.) that the IL trimmer cannot statically analyze.
+       Preserve everything to avoid 0x80005008 from trimmed stubs. -->
+  <assembly fullname="System.DirectoryServices" preserve="all" />
+  <assembly fullname="System.DirectoryServices.AccountManagement" preserve="all" />
+</linker>

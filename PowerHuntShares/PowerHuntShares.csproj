@@ -24,6 +24,12 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <!-- Prevent IL trimmer from stripping COM interop stubs needed by
+         DirectorySearcher (IDirectorySearch, SetSearchPreference, etc.) -->
+    <TrimmerRootDescriptor Include="TrimmerRoots.xml" />
+  </ItemGroup>
+
+  <ItemGroup>
 <PackageReference Include="System.DirectoryServices" Version="8.0.1" />
     <PackageReference Include="System.DirectoryServices.AccountManagement" Version="8.0.1" />
     <PackageReference Include="System.Security.Cryptography.ProtectedData" Version="8.0.0" />

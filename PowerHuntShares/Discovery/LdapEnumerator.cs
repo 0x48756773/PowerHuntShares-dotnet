@@ -136,14 +136,26 @@ public class LdapEnumerator
         int pageSize = 1000,
         SearchScope scope = SearchScope.Subtree)
     {
-        DirectoryEntry rootEntry = BuildDirectoryEntry(ldapPath);
-        return ExecuteSearch(rootEntry, ldapFilter, scope, pageSize);
+        using DirectoryEntry rootEntry = BuildDirectoryEntry(ldapPath);
+
+        try
+        {
+            return ExecuteSearch(rootEntry, ldapFilter, scope, pageSize);
+        }
+        catch (Exception ex) when (IsPageControlError(ex) && pageSize > 0)
+        {
+            // E_ADS_BAD_PARAMETER (0x80005008) means a search preference is
+            // unsupported — typically the paging or referral LDAP control.
+            // Retry with a fresh DirectoryEntry + DirectorySearcher so no COM
+            // object carries cached state from the failed attempt.
+            using DirectoryEntry freshEntry = BuildDirectoryEntry(ldapPath);
+            return ExecuteSearch(freshEntry, ldapFilter, scope, pageSize: 0);
+        }
     }
 
     /// <summary>
-    /// Inner search executor. Uses a fresh DirectorySearcher on each call so
-    /// that the retry (PageSize=0) is not hampered by a COM object that cached
-    /// the paging preference from the first failed attempt.
+    /// Inner search executor.  Always creates a fresh DirectorySearcher
+    /// so each attempt gets a clean IDirectorySearch COM object.
     /// </summary>
     private IReadOnlyList<SearchResult> ExecuteSearch(
         DirectoryEntry rootEntry,
@@ -166,13 +178,6 @@ public class LdapEnumerator
             using var results = searcher.FindAll();
             // Copy into a list before disposing the SearchResultCollection.
             return results.Cast<SearchResult>().ToList();
-        }
-        catch (Exception ex) when (IsPageControlError(ex) && pageSize > 0)
-        {
-            // E_ADS_BAD_PARAMETER (0x80005008) means a search preference is
-            // unsupported. Retry with a brand-new DirectorySearcher and paging
-            // disabled so the COM object carries no state from the failed attempt.
-            return ExecuteSearch(rootEntry, ldapFilter, scope, pageSize: 0);
         }
         catch (Exception ex)
         {
@@ -268,10 +273,20 @@ public class LdapEnumerator
         return MakeEntry(ldapUri);
     }
 
-    private DirectoryEntry MakeEntry(string path) =>
-        _credential is not null
-            ? new DirectoryEntry(path, _credential.UserName, _credential.Password)
-            : new DirectoryEntry(path);
+    private DirectoryEntry MakeEntry(string path)
+    {
+        // Request signing + sealing so the LDAP channel satisfies DCs that
+        // enforce LDAP signing (common default on Server 2019+).
+        // .NET Framework auto-negotiates this; .NET 8's NuGet package may not.
+        const AuthenticationTypes authFlags =
+            AuthenticationTypes.Secure |
+            AuthenticationTypes.Signing |
+            AuthenticationTypes.Sealing;
+
+        return _credential is not null
+            ? new DirectoryEntry(path, _credential.UserName, _credential.Password, authFlags)
+            : new DirectoryEntry(path, null, null, authFlags);
+    }
 
     // DirectoryServicesCOMException inherits ExternalException, not COMException,
     // so "ex is COMException" never matches.  Use HResult which is on all exceptions.
