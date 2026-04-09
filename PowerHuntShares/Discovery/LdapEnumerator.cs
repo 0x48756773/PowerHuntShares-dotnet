@@ -267,9 +267,10 @@ public class LdapEnumerator
             ? new DirectoryEntry(path, _credential.UserName, _credential.Password)
             : new DirectoryEntry(path);
 
+    // DirectoryServicesCOMException inherits ExternalException, not COMException,
+    // so "ex is COMException" never matches.  Use HResult which is on all exceptions.
     private static bool IsPageControlError(Exception ex) =>
-        ex is System.Runtime.InteropServices.COMException com &&
-        unchecked((uint)com.HResult) == 0x80005008;
+        unchecked((uint)ex.HResult) == 0x80005008;
 
     private string BuildQueryError(DirectoryEntry root, string filter, Exception ex)
     {
