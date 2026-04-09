@@ -4,4 +4,13 @@
        Preserve everything to avoid 0x80005008 from trimmed stubs. -->
   <assembly fullname="System.DirectoryServices" preserve="all" />
   <assembly fullname="System.DirectoryServices.AccountManagement" preserve="all" />
+
+  <!-- Preserve public properties on all model types used by CsvExporter
+       (reflection-based Export-Csv) and HtmlReportGenerator. -->
+  <assembly fullname="PowerHuntShares">
+    <type fullname="PowerHuntShares.Discovery.Models.*" preserve="all" />
+    <type fullname="PowerHuntShares.Shares.Models.*" preserve="all" />
+    <type fullname="PowerHuntShares.Credentials.Models.*" preserve="all" />
+    <type fullname="PowerHuntShares.Core.ScanResults" preserve="all" />
+  </assembly>
 </linker>

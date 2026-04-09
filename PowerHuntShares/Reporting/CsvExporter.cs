@@ -1,3 +1,4 @@
+using System.Diagnostics.CodeAnalysis;
 using System.Reflection;
 using System.Text;
 
@@ -13,7 +14,8 @@ public static class CsvExporter
     /// Writes a list of objects to a CSV file at the specified path.
     /// Column headers are derived from public property names (mirrors -NoTypeInformation).
     /// </summary>
-    public static void Export<T>(IEnumerable<T> items, string filePath)
+    public static void Export<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicProperties)] T>(
+        IEnumerable<T> items, string filePath)
     {
         var props = typeof(T).GetProperties(BindingFlags.Public | BindingFlags.Instance);
         var sb = new StringBuilder();
