@@ -137,8 +137,12 @@ public class LdapEnumerator
         }
         catch (Exception ex)
         {
+            string hint = string.IsNullOrEmpty(_domainController)
+                ? " If this machine is not domain-joined, use --domain-controller to specify a DC."
+                : string.Empty;
             throw new InvalidOperationException(
-                $"LDAP query failed (filter={ldapFilter}): {ex.Message}", ex);
+                $"LDAP query failed — root='{rootEntry.Path}' filter='{ldapFilter}' " +
+                $"baseDn='{_baseDn ?? "unresolved"}': {ex.GetType().Name}: {ex.Message}{hint}", ex);
         }
     }
 
@@ -176,33 +180,38 @@ public class LdapEnumerator
 
     private DirectoryEntry BuildDirectoryEntry(string? ldapPath)
     {
-        // Partial paths (e.g. CN=Subnets,CN=Sites,CN=Configuration) must be
-        // qualified with the domain base DN or ADSI throws E_ADS_BAD_PATHNAME.
-        string? resolvedPath = null;
-        if (!string.IsNullOrEmpty(ldapPath))
-        {
-            string baseDn = GetBaseDn();
-            resolvedPath = string.IsNullOrEmpty(baseDn) ? ldapPath : $"{ldapPath},{baseDn}";
-        }
+        // Mirror PS Get-LdapQuery exactly:
+        //   $objDomain = ([ADSI]'').distinguishedName  (or LDAP://$DC version)
+        //   if ($LdapPath) { $LdapPath = $LdapPath + ',' + $objDomain }
+        //   $objDomainPath = [ADSI]"LDAP://$LdapPath"  -or-  [ADSI]''
+        //
+        // Key: PS always resolves the base DN first and builds a fully-qualified
+        // path.  Bare "LDAP://" is E_ADS_BAD_PARAMETER; "" alone can fail too.
+
+        string baseDn = GetBaseDn();
+
+        // Build the fully-qualified DN for the search root.
+        string fullDn = !string.IsNullOrEmpty(ldapPath)
+            ? (string.IsNullOrEmpty(baseDn) ? ldapPath : $"{ldapPath},{baseDn}")
+            : baseDn;   // no sub-path → domain root DN
 
         string ldapUri;
         if (!string.IsNullOrEmpty(_domainController))
         {
-            ldapUri = resolvedPath is not null
-                ? $"LDAP://{_domainController}/{resolvedPath}"
+            // With explicit DC: LDAP://dc1.domain.local/DC=domain,DC=local
+            ldapUri = !string.IsNullOrEmpty(fullDn)
+                ? $"LDAP://{_domainController}/{fullDn}"
                 : $"LDAP://{_domainController}";
         }
         else
         {
-            ldapUri = resolvedPath is not null
-                ? $"LDAP://{resolvedPath}"
-                : string.Empty;
+            // No DC: LDAP://DC=domain,DC=local  (explicit, fully-qualified)
+            // If baseDn is empty (RootDSE failed), fall back to "" and let
+            // ADSI auto-discover — same as [ADSI]'' in the PS script.
+            ldapUri = !string.IsNullOrEmpty(fullDn)
+                ? $"LDAP://{fullDn}"
+                : "";
         }
-
-        // Fall back to "LDAP://" (not empty string) so ADSI uses the LDAP
-        // provider against the current domain rather than the WinNT provider.
-        if (string.IsNullOrEmpty(ldapUri))
-            ldapUri = "LDAP://";
 
         if (_credential is not null)
             return new DirectoryEntry(ldapUri, _credential.UserName, _credential.Password);
