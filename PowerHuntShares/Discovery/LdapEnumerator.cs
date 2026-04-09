@@ -149,42 +149,59 @@ public class LdapEnumerator
     // ── Helpers ──────────────────────────────────────────────────────────────
 
     /// <summary>
-    /// Resolves the domain base DN (e.g. DC=domain,DC=local).
-    /// Mirrors PS: (New-Object DirectoryEntry "LDAP://$DC").distinguishedname
-    ///             or ([ADSI]"").distinguishedName for the no-DC case.
-    /// Cached after the first call.
+    /// Resolves the domain base DN (e.g. DC=domain,DC=local). Cached after the first call.
+    ///
+    /// Strategy (in order):
+    ///   1. LDAP bind to DC / RootDSE and read the DN property (mirrors PS).
+    ///   2. If the bind returns empty, derive the DN from the domain name itself:
+    ///      domain.local → DC=domain,DC=local.  Works for all standard AD structures.
     /// </summary>
     private string GetBaseDn()
     {
         if (_baseDn is not null)
             return _baseDn;
 
-        // Mirror PS exactly: bind to LDAP://$DC (no /RootDSE suffix) and read
-        // distinguishedName.  For the no-DC case, bind to "LDAP://RootDSE"
-        // to get defaultNamingContext (auto-discovers the current domain DC).
-        string rootPath;
-        string property;
         if (!string.IsNullOrEmpty(_domainController))
         {
-            rootPath = $"LDAP://{_domainController}";
-            property = "distinguishedName";
+            // 1. Try binding to the DC and reading distinguishedName.
+            //    Mirrors PS: (New-Object DirectoryEntry "LDAP://$DC").distinguishedname
+            try
+            {
+                using var root = _credential is not null
+                    ? new DirectoryEntry($"LDAP://{_domainController}", _credential.UserName, _credential.Password)
+                    : new DirectoryEntry($"LDAP://{_domainController}");
+
+                root.RefreshCache(["distinguishedName"]);
+                _baseDn = root.Properties["distinguishedName"]?[0]?.ToString();
+            }
+            catch { /* fall through to derivation */ }
+
+            // 2. If the bind gave nothing, derive DN from the domain name.
+            //    domain.local → DC=domain,DC=local  (standard AD convention).
+            if (string.IsNullOrEmpty(_baseDn) && _domainController.Contains('.'))
+                _baseDn = string.Join(",",
+                    _domainController.Split('.').Select(p => $"DC={p}"));
         }
         else
         {
-            rootPath = "LDAP://RootDSE";
-            property = "defaultNamingContext";
+            // No DC specified: try RootDSE auto-discovery (domain-joined machine).
+            try
+            {
+                using var rootDse = _credential is not null
+                    ? new DirectoryEntry("LDAP://RootDSE", _credential.UserName, _credential.Password)
+                    : new DirectoryEntry("LDAP://RootDSE");
+
+                rootDse.RefreshCache(["defaultNamingContext"]);
+                _baseDn = rootDse.Properties["defaultNamingContext"]?[0]?.ToString();
+            }
+            catch { }
         }
-
-        using var root = _credential is not null
-            ? new DirectoryEntry(rootPath, _credential.UserName, _credential.Password)
-            : new DirectoryEntry(rootPath);
-
-        _baseDn = root.Properties[property]?[0]?.ToString() ?? string.Empty;
 
         if (string.IsNullOrEmpty(_baseDn))
             throw new InvalidOperationException(
-                $"Could not resolve domain base DN from '{rootPath}'. " +
-                "Verify the domain controller is reachable and credentials are correct.");
+                $"Could not determine base DN for '{_domainController ?? "auto-discover"}'. " +
+                "Verify the DC is reachable and credentials are correct. " +
+                "If the domain name does not map directly to a base DN, use -d to specify a DC hostname.");
 
         return _baseDn;
     }
